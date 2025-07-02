@@ -19,9 +19,8 @@ function loadLeadsFromAPI() {
     "3202636": "Shopmate",
     "717776": "Kupona Display Performance und Retargeting",
     "3222797": "Gutscheine.codes",
-    "9748711": "Kupona Rebounce",
-    "4429980": "DISCOUNTO",
-    "9742982": "buswelt.de"
+    "9742982": "buswelt.de",
+    "9748711":"Kupona Rebounce"
   };
 
   try {
@@ -127,33 +126,40 @@ function refreshLeadsSheet() {
 
   const incoming = newRows
     .filter(row => !existingTokens.has(String(row[ordertokenCol]).trim()))
-    .map(row => ({ row, sortDate: row[12] })) // ⬅ index 12 = unsichtbares Date
+    .map(row => ({ row, sortDate: row[12] })); // ⬅ index 12 = unsichtbares Date
 
   if (incoming.length > 0) {
+    // ✅ Filter vorübergehend deaktivieren, um Fehler zu vermeiden
+    if (leadsSheet.getFilter()) {
+      leadsSheet.getFilter().remove();
+    }
+
     // Alte Daten neu laden & sortieren
-  const allRows = sheetRows.map(r => {
-  let sortDate;
+    const allRows = sheetRows.map(r => {
+      let sortDate;
 
-  if (r[1] instanceof Date) {
-    sortDate = r[1];
-  } else if (typeof r[1] === "string" && r[1].includes(".")) {
-    const [day, month, year] = r[1].split(" ")[0].split(".");
-    sortDate = new Date(`${year}-${month}-${day}`);
-  } else {
-    sortDate = new Date("2100-01-01"); // fallback weit in Zukunft
-  }
+      if (r[1] instanceof Date) {
+        sortDate = r[1];
+      } else if (typeof r[1] === "string" && r[1].includes(".")) {
+        const [day, month, year] = r[1].split(" ")[0].split(".");
+        sortDate = new Date(`${year}-${month}-${day}`);
+      } else {
+        sortDate = new Date("2100-01-01"); // fallback weit in Zukunft
+      }
 
-  return { row: r, sortDate };
-}).concat(incoming);
+      return { row: r, sortDate };
+    }).concat(incoming);
 
     allRows.sort((a, b) => a.sortDate - b.sortDate);
     const sorted = allRows.map(obj => obj.row);
 
-    // Setze zurück & schreibe alles neu
+    // Sheet vollständig leeren (nach Filter entfernen)
     leadsSheet.clearContents();
-    leadsSheet.getRange(1, 1, 1, headers.length).setValues([headers]); // Kopf
+
+    // Daten neu schreiben
+    leadsSheet.getRange(1, 1, 1, headers.length).setValues([headers]); // Kopfzeile
     leadsSheet.getRange(2, 1, sorted.length, headers.length).setValues(
-      sorted.map(r => r.slice(0, headers.length)) // schneidet Timestamp-Hilfsspalte ab
+      sorted.map(r => r.slice(0, headers.length)) // Timestamp-Hilfsspalte abschneiden
     );
 
     Logger.log(`✅ ${incoming.length} neue Leads ergänzt und sortiert.`);
@@ -161,6 +167,7 @@ function refreshLeadsSheet() {
     Logger.log("Keine neuen Leads.");
   }
 
+  updateManualRows();
   syncStatusFromLeadsToSales();
 }
 
@@ -207,6 +214,50 @@ function syncStatusFromLeadsToSales() {
   }
 
   Logger.log(`🔄 ${synced} Einträge von Leads ➝ Sales synchronisiert.`);
+}
+
+function updateManualRows() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Leads");
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+
+  const timestampCol = headers.indexOf("Timestamp");
+  const tageCol = headers.indexOf("Anzahl Tage seit Bestellung");
+
+  if (timestampCol === -1 || tageCol === -1) {
+    Logger.log("❌ Spalten nicht gefunden");
+    return;
+  }
+
+  const heute = new Date();
+  let updated = 0;
+
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    const timestampStr = row[timestampCol];
+
+    let datum;
+
+    if (timestampStr instanceof Date) {
+      datum = timestampStr;
+    } else if (typeof timestampStr === "string" && timestampStr.includes(".")) {
+      const [datePart] = timestampStr.split(" ");
+      const [dd, mm, yyyy] = datePart.split(".");
+      datum = new Date(`${yyyy}-${mm}-${dd}`);
+    }
+
+    if (datum instanceof Date && !isNaN(datum)) {
+      const diffTage = Math.floor((heute - datum) / (1000 * 60 * 60 * 24));
+      const neuerWert = diffTage >= 60 ? "60 Tage erreicht" : "60 Tage noch nicht erreicht";
+
+      if (row[tageCol] !== neuerWert) {
+        sheet.getRange(i + 1, tageCol + 1).setValue(neuerWert);
+        updated++;
+      }
+    }
+  }
+
+  Logger.log(`🔁 ${updated} manuelle Zeilen aktualisiert.`);
 }
 
 function calculateCalendarWeek(date) {
