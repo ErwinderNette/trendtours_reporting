@@ -2,6 +2,11 @@ function refreshReportingSales() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName("Reporting Sales");
 
+  if (!sheet) {
+    Logger.log("❌ Tabellenblatt 'Reporting Sales' nicht gefunden.");
+    return;
+  }
+
   const apiUrl = "https://netzwerk.uppr.de/api//6115e2ebc15bf7cffcf39c56dfce109acc702fe1/admin/5/get-orders.json?condition[period][from]=2025-05-05&condition[period][to]=2030-12-31&condition[paymentstatus]=all&condition[l:status]=open,confirmed,canceled,paidout&condition[l:campaigns]=168";
 
   try {
@@ -13,7 +18,10 @@ function refreshReportingSales() {
     });
 
     const jsonData = JSON.parse(response.getContentText());
-    if (!Array.isArray(jsonData)) return;
+    if (!Array.isArray(jsonData)) {
+      Logger.log("❌ Ungültige API-Antwort.");
+      return;
+    }
 
     const startDate = new Date("2025-05-05T00:00:00Z");
     const filtered = jsonData.filter(order => {
@@ -33,55 +41,63 @@ function refreshReportingSales() {
     filtered.forEach(order => {
       const date = new Date(order.timestamp);
       const kwKey = getWeekKey(date);
-      if (!grouped[kwKey]) {
-        grouped[kwKey] = { count: 0, sum: 0 };
-      }
+      if (!grouped[kwKey]) grouped[kwKey] = { count: 0, sum: 0 };
       grouped[kwKey].count++;
       grouped[kwKey].sum += Number(order.turnover) || 0;
     });
 
-    // Lese vorhandene KW-Einträge aus Spalte A (KW)
-    const existingWeeks = new Set(
-      sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues().flat()
-    );
-
-    const newRows = Object.entries(grouped)
-      .filter(([kw]) => !existingWeeks.has(kw))
-      .sort()
-      .map(([kw, values]) => [
-        kw,
-        values.count,
-        formatEuro(values.sum)
-      ]);
-
-    if (newRows.length > 0) {
-      const firstFreeRow = sheet.getLastRow() + 1;
-      sheet.getRange(firstFreeRow, 1, newRows.length, 3).setValues(newRows);
-      Logger.log(`${newRows.length} neue Wochen ergänzt.`);
-    } else {
-      Logger.log("Keine neuen Wochen zu ergänzen.");
+    // Bestehende Daten auslesen
+    const existingRows = sheet.getRange(2, 1, sheet.getLastRow() - 1, 3).getValues();
+    const kwToRowMap = new Map();
+    for (let i = 0; i < existingRows.length; i++) {
+      const kw = existingRows[i][0];
+      if (kw) {
+        kwToRowMap.set(kw, i + 2); // Zeile im Sheet
+      }
     }
 
+    // Neue Daten sortieren
+    const sortedEntries = Object.entries(grouped).sort(([a], [b]) => {
+      const dateA = parseDateFromKW(a);
+      const dateB = parseDateFromKW(b);
+      return dateA - dateB;
+    });
+
+    let updated = 0;
+    let inserted = 0;
+
+    sortedEntries.forEach(([kw, values]) => {
+      const rowData = [[kw, values.count, formatEuro(values.sum)]];
+      const rowIndex = kwToRowMap.get(kw);
+
+      if (rowIndex) {
+        sheet.getRange(rowIndex, 1, 1, 3).setValues(rowData);
+        updated++;
+      } else {
+        const insertRow = sheet.getLastRow() + 1;
+        sheet.getRange(insertRow, 1, 1, 3).setValues(rowData);
+        inserted++;
+      }
+    });
+
+    Logger.log(`📊 Reporting Sales: ${updated} Zeilen aktualisiert, ${inserted} ergänzt.`);
+
   } catch (error) {
-    Logger.log("Fehler bei der API-Abfrage: " + error);
+    Logger.log("❌ Fehler bei der API-Abfrage: " + error);
   }
-}
+  function getWeekKey(date) {
+  const week = getCalendarWeek(date);
 
-function getWeekKey(date) {
-  const start = getMonday(date);
-  const end = new Date(start);
-  end.setDate(start.getDate() + 6);
-  const weekNumber = getCalendarWeek(date);
-  const startStr = formatShortDate(start);
-  const endStr = formatShortDate(end);
-  return `KW${weekNumber}//${startStr}-${endStr}`;
-}
-
-function getMonday(d) {
-  const date = new Date(d);
   const day = date.getDay();
-  const diff = date.getDate() - day + (day === 0 ? -6 : 1);
-  return new Date(date.setDate(diff));
+  const diffToMonday = (day === 0 ? -6 : 1) - day;
+  const monday = new Date(date);
+  monday.setDate(date.getDate() + diffToMonday);
+
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+
+  const fmt = d => `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
+  return `KW${week}//${fmt(monday)}-${fmt(sunday)}`;
 }
 
 function getCalendarWeek(date) {
@@ -93,16 +109,19 @@ function getCalendarWeek(date) {
   return 1 + Math.round(diff / (7 * 24 * 60 * 60 * 1000));
 }
 
-function formatShortDate(date) {
-  const dd = String(date.getDate()).padStart(2, "0");
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const yyyy = date.getFullYear();
-  return `${dd}.${mm}.${yyyy}`;
-}
-
 function formatEuro(amount) {
   return Number(amount).toLocaleString("de-DE", {
     style: "currency",
     currency: "EUR"
   });
+}
+
+function parseDateFromKW(kwString) {
+  const parts = kwString.split("//");
+  if (parts.length !== 2) return new Date("2100-01-01");
+  const startDateStr = parts[1].split("-")[0];
+  const [dd, mm, yyyy] = startDateStr.split(".");
+  return new Date(`${yyyy}-${mm}-${dd}`);
+}
+
 }
