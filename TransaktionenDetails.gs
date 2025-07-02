@@ -19,9 +19,8 @@ function TransaktionenDetails() {
     "3202636": "Shopmate",
     "717776": "Kupona Display Performance und Retargeting",
     "3222797": "Gutscheine.codes",
-    "9748711": "Kupona Rebounce",
-    "4429980": "DISCOUNTO",
-    "9742982": "buswelt.de"
+    "9742982": "buswelt.de",
+    "9748711":"Kupona Rebounce"
   };
 
   try {
@@ -182,11 +181,56 @@ function refreshSalesSheet() {
   } else {
     Logger.log("Keine neuen Sales.");
   }
-
+   Logger.log(`✅ ${incoming.length} neue Sales ergänzt und sortiert.`);
+  updateSalesByReisestart(); // ⬅️ hier
   // Falls gewünscht: Status von Leads ➝ Sales synchronisieren
   if (typeof syncStatusFromLeadsToSales === "function") {
     syncStatusFromLeadsToSales();
   }
+}
+
+function updateSalesByReisestart() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Sales");
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+
+  const reisestartCol = headers.indexOf("Reisestart (Description)");
+  const tageCol = headers.indexOf("Anzahl Tage seit Bestellung");
+
+  if (reisestartCol === -1 || tageCol === -1) {
+    Logger.log("❌ Spalten nicht gefunden.");
+    return;
+  }
+
+  const heute = new Date();
+  let updated = 0;
+
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    const reisestartStr = row[reisestartCol];
+
+    let datum = null;
+
+    if (reisestartStr instanceof Date) {
+      datum = reisestartStr;
+    } else if (typeof reisestartStr === "string" && reisestartStr.includes(".")) {
+      const [dd, mm, yyyy] = reisestartStr.split(".");
+      datum = new Date(`${yyyy}-${mm}-${dd}`);
+    }
+
+   if (datum instanceof Date && !isNaN(datum)) {
+  const diffTage = Math.max(0, Math.floor((heute - datum) / (1000 * 60 * 60 * 24)));
+  const neuerWert = diffTage >= 30 ? "30 Tage erreicht" : "30 Tage noch nicht erreicht";
+
+     if (row[tageCol] !== neuerWert) {
+    sheet.getRange(i + 1, tageCol + 1).setValue(neuerWert);
+    updated++;
+  }
+}
+
+  }
+
+  Logger.log(`📆 ${updated} Sales-Zeilen basierend auf Reisestart aktualisiert.`);
 }
 
 // ➕ Ergänzende Hilfsfunktionen
@@ -217,6 +261,12 @@ function formatDateWithTime(date) {
   return `${day}.${month}.${year} ${hours}:${minutes}`;
 }
 
+function formatShortDate(date) {
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const year = date.getFullYear();
+  return `${day}.${month}.${year}`;
+}
 
 function formatEuro(amount) {
   return Number(amount).toLocaleString("de-DE", {
